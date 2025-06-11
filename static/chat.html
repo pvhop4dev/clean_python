@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebSocket Chat</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            display: flex;
+            flex-direction: column;
+            height: 90vh;
+        }
+        .chat-container {
+            flex: 1;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            background: white;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .messages {
+            flex: 1;
+            padding: 15px;
+            overflow-y: auto;
+        }
+        .message {
+            margin-bottom: 10px;
+            padding: 8px 12px;
+            border-radius: 15px;
+            max-width: 70%;
+            word-wrap: break-word;
+        }
+        .message.sent {
+            background-color: #007bff;
+            color: white;
+            margin-left: auto;
+            border-bottom-right-radius: 5px;
+        }
+        .message.received {
+            background-color: #e9ecef;
+            color: #212529;
+            margin-right: auto;
+            border-bottom-left-radius: 5px;
+        }
+        .message.system {
+            background-color: #f8f9fa;
+            color: #6c757d;
+            text-align: center;
+            font-style: italic;
+            margin: 10px auto;
+            max-width: 100%;
+            border-radius: 5px;
+            padding: 5px;
+            font-size: 0.9em;
+        }
+        .input-area {
+            display: flex;
+            padding: 10px;
+            border-top: 1px solid #ddd;
+            background: #f8f9fa;
+        }
+        #messageInput {
+            flex: 1;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 20px;
+            margin-right: 10px;
+            outline: none;
+        }
+        button {
+            padding: 10px 20px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 20px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        .user-list {
+            width: 200px;
+            border-left: 1px solid #ddd;
+            padding: 15px;
+            background: #f8f9fa;
+            overflow-y: auto;
+        }
+        .chat-wrapper {
+            display: flex;
+            flex: 1;
+        }
+        .chat-main {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+        }
+        .room-info {
+            padding: 10px 15px;
+            background: #e9ecef;
+            border-bottom: 1px solid #ddd;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>WebSocket Chat</h1>
+        <div id="loginContainer">
+            <h2>Login to Chat</h2>
+            <div>
+                <input type="text" id="usernameInput" placeholder="Enter your username" style="padding: 10px; width: 200px; margin-right: 10px;">
+                <input type="password" id="passwordInput" placeholder="Enter your password" style="padding: 10px; width: 200px; margin-right: 10px;">
+                <button onclick="login()">Login</button>
+                <button onclick="register()">Register</button>
+            </div>
+        </div>
+        
+        <div id="chatContainer" style="display: none;">
+            <div class="chat-wrapper">
+                <div class="chat-main">
+                    <div class="room-info">
+                        Room: <span id="currentRoom">general</span>
+                    </div>
+                    <div class="chat-container">
+                        <div class="messages" id="messages"></div>
+                        <div class="input-area">
+                            <input type="text" id="messageInput" placeholder="Type your message..." onkeypress="handleKeyPress(event)">
+                            <button onclick="sendMessage()">Send</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="user-list">
+                    <h3>Online Users</h3>
+                    <div id="userList"></div>
+                </div>
+            </div>
+            <div style="margin-top: 10px;">
+                <input type="text" id="roomInput" placeholder="Room ID" value="general" style="padding: 8px; margin-right: 10px;">
+                <button onclick="joinRoom()">Join Room</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let ws = null;
+        let currentUser = null;
+        let currentToken = null;
+        let currentRoom = 'general';
+        
+        // DOM Elements
+        const loginContainer = document.getElementById('loginContainer');
+        const chatContainer = document.getElementById('chatContainer');
+        const messagesDiv = document.getElementById('messages');
+        const messageInput = document.getElementById('messageInput');
+        const userList = document.getElementById('userList');
+        const roomInput = document.getElementById('roomInput');
+        const currentRoomSpan = document.getElementById('currentRoom');
+
+        // Helper function to add a message to the UI
+        function addMessage(message, type = 'received') {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${type}`;
+            messageDiv.textContent = message;
+            messagesDiv.appendChild(messageDiv);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+
+        // Helper function to add a system message
+        function addSystemMessage(message) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'message system';
+            messageDiv.textContent = message;
+            messagesDiv.appendChild(messageDiv);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+
+        // Update user list
+        function updateUserList(users) {
+            userList.innerHTML = '';
+            users.forEach(user => {
+                const userDiv = document.createElement('div');
+                userDiv.textContent = user;
+                userList.appendChild(userDiv);
+            });
+        }
+
+        // Connect to WebSocket
+        function connectWebSocket() {
+            const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${wsProtocol}//${window.location.host}/api/v1/chat/ws/${currentRoom}?token=${currentToken}`;
+            
+            ws = new WebSocket(wsUrl);
+            
+            ws.onopen = () => {
+                console.log('WebSocket connected');
+                addSystemMessage(`Connected to room: ${currentRoom}`);
+            };
+            
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                console.log('Message received:', data);
+                
+                switch(data.type) {
+                    case 'message':
+                        const isCurrentUser = data.sender_id === currentUser;
+                        addMessage(
+                            `${data.message.sender}: ${data.message.content}`,
+                            isCurrentUser ? 'sent' : 'received'
+                        );
+                        break;
+                        
+                    case 'user_joined':
+                        addSystemMessage(`${data.user_id} joined the room`);
+                        updateUserList(data.participants);
+                        break;
+                        
+                    case 'user_left':
+                        addSystemMessage(`${data.user_id} left the room`);
+                        updateUserList(data.participants);
+                        break;
+                        
+                    case 'room_info':
+                        updateUserList(data.participants);
+                        // Display previous messages
+                        data.messages.forEach(msg => {
+                            const isCurrentUser = msg.sender === currentUser;
+                            addMessage(
+                                `${msg.sender}: ${msg.content}`,
+                                isCurrentUser ? 'sent' : 'received'
+                            );
+                        });
+                        break;
+                }
+            };
+            
+            ws.onclose = () => {
+                console.log('WebSocket disconnected');
+                addSystemMessage('Disconnected from server. Reconnecting...');
+                // Try to reconnect after a delay
+                setTimeout(connectWebSocket, 3000);
+            };
+            
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+            };
+        }
+
+        // Send a message
+        function sendMessage() {
+            const message = messageInput.value.trim();
+            if (message && ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    type: 'message',
+                    content: message
+                }));
+                messageInput.value = '';
+            }
+        }
+
+        // Handle Enter key press
+        function handleKeyPress(event) {
+            if (event.key === 'Enter') {
+                sendMessage();
+            }
+        }
+
+        // Join a room
+        function joinRoom() {
+            const roomId = roomInput.value.trim() || 'general';
+            if (roomId !== currentRoom) {
+                currentRoom = roomId;
+                currentRoomSpan.textContent = currentRoom;
+                messagesDiv.innerHTML = '';
+                if (ws) {
+                    ws.close();
+                }
+                connectWebSocket();
+            }
+        }
+
+        // Login function
+        async function login() {
+            const username = document.getElementById('usernameInput').value;
+            const password = document.getElementById('passwordInput').value;
+            
+            try {
+                const response = await fetch('/api/v1/auth/login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        username: username,
+                        password: password
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    currentToken = data.access_token;
+                    currentUser = username;
+                    loginContainer.style.display = 'none';
+                    chatContainer.style.display = 'block';
+                    connectWebSocket();
+                } else {
+                    alert(data.detail || 'Login failed');
+                }
+            } catch (error) {
+                console.error('Login error:', error);
+                alert('Error connecting to server');
+            }
+        }
+
+        // Register function
+        async function register() {
+            const username = document.getElementById('usernameInput').value;
+            const password = document.getElementById('passwordInput').value;
+            
+            try {
+                const response = await fetch('/api/v1/auth/register', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        username: username,
+                        email: `${username}@example.com`,
+                        password: password,
+                        full_name: username
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    alert('Registration successful! Please login.');
+                } else {
+                    alert(data.detail || 'Registration failed');
+                }
+            } catch (error) {
+                console.error('Registration error:', error);
+                alert('Error connecting to server');
+            }
+        }
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            // Check if already logged in (from localStorage)
+            const savedToken = localStorage.getItem('auth_token');
+            const savedUser = localStorage.getItem('username');
+            
+            if (savedToken && savedUser) {
+                currentToken = savedToken;
+                currentUser = savedUser;
+                loginContainer.style.display = 'none';
+                chatContainer.style.display = 'block';
+                connectWebSocket();
+            }
+        });
+    </script>
+</body>
+</html>
